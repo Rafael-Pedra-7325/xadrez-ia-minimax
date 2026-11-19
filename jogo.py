@@ -1,14 +1,32 @@
 """
 Regras e estado do Xadrez baseados na biblioteca python-chess.
-Fornece validação de lances, serialização do tabuleiro e detecção de fim de jogo.
+Fornece validação estrita de FEN/lances, serialização do tabuleiro e detecção de fim de jogo.
 """
 
 import chess
 
+MAPA_MOTIVOS_FIM = {
+    chess.Termination.CHECKMATE: "Xeque-mate",
+    chess.Termination.STALEMATE: "Afogamento (empate)",
+    chess.Termination.INSUFFICIENT_MATERIAL: "Material insuficiente",
+    chess.Termination.SEVENTYFIVE_MOVES: "Regra dos 75 lances",
+    chess.Termination.FIVEFOLD_REPETITION: "Repetição quíntupla",
+    chess.Termination.FIFTY_MOVES: "Regra dos 50 lances",
+    chess.Termination.THREEFOLD_REPETITION: "Repetição tripla",
+}
+
 
 class PartidaXadrez:
     def __init__(self, fen=None):
-        self.board = chess.Board(fen) if fen else chess.Board()
+        if fen is None:
+            self.board = chess.Board()
+        else:
+            if not isinstance(fen, str) or not fen.strip():
+                raise ValueError("FEN inválido: deve ser uma string não vazia.")
+            self.board = chess.Board(fen.strip())
+
+        if not self.board.is_valid():
+            raise ValueError("Posição FEN ilegal pelas regras do xadrez.")
 
     def copiar(self):
         return PartidaXadrez(self.board.fen())
@@ -20,8 +38,12 @@ class PartidaXadrez:
         return [move.uci() for move in self.board.legal_moves]
 
     def jogar_uci(self, lance_uci):
+        if not isinstance(lance_uci, str) or not lance_uci.strip():
+            raise ValueError("Lance UCI não informado ou inválido.")
+
+        lance_limpo = lance_uci.strip().lower()
         try:
-            move = chess.Move.from_uci(lance_uci)
+            move = chess.Move.from_uci(lance_limpo)
         except ValueError as exc:
             raise ValueError(f"Formato de lance inválido: {lance_uci}") from exc
 
@@ -56,16 +78,7 @@ class PartidaXadrez:
                 else:
                     vencedor = "empate"
 
-                mapa_motivos = {
-                    chess.CHECKMATE: "Xeque-mate",
-                    chess.STALEMATE: "Afogamento (empate)",
-                    chess.INSUFFICIENT_MATERIAL: "Material insuficiente",
-                    chess.SEVENTYFIVE_MOVES: "Regra dos 75 lances",
-                    chess.FIVEFOLD_REPETITION: "Repetição quíntupla",
-                    chess.FIFTY_MOVES: "Regra dos 50 lances",
-                    chess.THREEFOLD_REPETITION: "Repetição tripla",
-                }
-                motivo_fim = mapa_motivos.get(outcome.termination, "Fim de partida")
+                motivo_fim = MAPA_MOTIVOS_FIM.get(outcome.termination, "Fim de partida")
 
         casa_rei_xeque = None
         if self.board.is_check():
