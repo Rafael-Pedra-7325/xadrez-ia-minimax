@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IA de Xadrez — Minimax & Poda Alfa-Beta</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <main class="app-container">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-badge">MINIMAX + ALFA-BETA + MVV-LVA</span>
+        <h1>Xadrez <span>Inteligente</span></h1>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btn-som" class="icon-btn" title="Alternar efeitos sonoros" aria-label="Alternar som">
+          🔊
+        </button>
+        <button id="btn-inverter" class="pill-btn" title="Girar perspectiva do tabuleiro">
+          ⇅ Inverter Lado
+        </button>
+        <button id="btn-raiox" class="pill-btn" title="Mostrar top 3 lances calculados pela IA">
+          <span class="dot"></span> Visão da IA
+        </button>
+        <button id="btn-dica" class="pill-btn pill-accent" title="Destacar o melhor lance agora">
+          ✨ Dica
+        </button>
+      </div>
+    </header>
+
+    <section class="scoreboard" aria-label="Placar da sessão">
+      <div class="score-card score-win">
+        <span class="score-label">Vitórias</span>
+        <strong id="placar-vitorias">0</strong>
+      </div>
+      <div class="score-card score-draw">
+        <span class="score-label">Empates</span>
+        <strong id="placar-empates">0</strong>
+      </div>
+      <div class="score-card score-loss">
+        <span class="score-label">IA Venceu</span>
+        <strong id="placar-derrotas">0</strong>
+      </div>
+      <div class="score-card score-eval">
+        <span class="score-label">Avaliação (Peões)</span>
+        <strong id="placar-eval">0.00</strong>
+      </div>
+    </section>
+
+    <section class="game-layout">
+      <aside class="panel controls-panel">
+        <div class="control-group">
+          <label>Nível da IA</label>
+          <div class="segmented" id="grupo-dificuldade">
+            <button type="button" data-value="facil">Fácil</button>
+            <button type="button" data-value="medio">Médio</button>
+            <button type="button" data-value="mestre" class="active">Mestre</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Suas Peças</label>
+          <div class="segmented segmented-2" id="grupo-cor">
+            <button type="button" data-value="brancas" class="active">♔ Brancas</button>
+            <button type="button" data-value="pretas">♚ Pretas</button>
+          </div>
+        </div>
+
+        <div class="captured-box">
+          <span class="stat-title">Peças Capturadas</span>
+          <div class="captured-row">
+            <span class="cap-label">Por você:</span>
+            <div id="cap-humano" class="cap-list">—</div>
+          </div>
+          <div class="captured-row">
+            <span class="cap-label">Pela IA:</span>
+            <div id="cap-ia" class="cap-list">—</div>
+          </div>
+        </div>
+
+        <div class="panel-footer-actions">
+          <button id="btn-reiniciar" class="primary-btn">
+            ↻ Nova Partida
+          </button>
+          <button id="btn-desfazer" class="ghost-btn">
+            ↩ Desfazer Jogada
+          </button>
+          <button id="btn-zerar-placar" class="ghost-btn">
+            Zerar Placar
+          </button>
+        </div>
+      </aside>
+
+      <section class="board-wrapper">
+        <div id="status-banner" class="status-banner turno-humano">
+          <span id="status-texto">Sua vez! Selecione uma peça branca para jogar.</span>
+        </div>
+
+        <div class="chess-stage">
+          <div class="eval-bar-container" title="Vantagem posicional: Brancas vs Pretas">
+            <div id="eval-bar-fill" class="eval-bar-fill" style="height: 50%;"></div>
+            <span id="eval-bar-label" class="eval-bar-label">0.0</span>
+          </div>
+
+          <div class="board-container">
+            <div id="tabuleiro" class="chess-board" role="grid" aria-label="Tabuleiro de Xadrez 8 por 8"></div>
+            <svg id="setas-svg" class="arrows-svg" viewBox="0 0 800 800" preserveAspectRatio="none"></svg>
+          </div>
+        </div>
+
+        <p class="keyboard-hint">
+          Clique na peça e depois na casa de destino • <kbd>Z</kbd> desfazer • <kbd>R</kbd> reiniciar
+        </p>
+      </section>
+
+      <aside class="panel telemetry-panel">
+        <div class="telemetry-header">
+          <span class="pulse-indicator"></span>
+          <h2>Cérebro da IA</h2>
+        </div>
+
+        <div class="telemetry-stats">
+          <div class="stat-box">
+            <span class="stat-title">Nós Analisados</span>
+            <span id="tel-nos" class="stat-value mono">—</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-title">Tempo de Busca</span>
+            <span id="tel-tempo" class="stat-value mono">—</span>
+          </div>
+        </div>
+
+        <div class="diagnosis-box">
+          <span class="stat-title">Diagnóstico Tático</span>
+          <p id="tel-motivo">Aguardando primeira jogada para iniciar a árvore Minimax.</p>
+        </div>
+
+        <div class="history-box">
+          <div class="history-header">
+            <span class="stat-title">Lances (Notação SAN)</span>
+            <button id="btn-copiar-fen" class="mini-btn" title="Copiar código FEN da posição atual">Copiar FEN</button>
+          </div>
+          <ol id="lista-historico" class="move-history">
+            <li class="empty-history">Nenhum lance realizado ainda.</li>
+          </ol>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div id="modal-promocao" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <h3>Promover Peão</h3>
+      <p>Escolha para qual peça deseja evoluir:</p>
+      <div class="promo-options">
+        <button type="button" data-piece="q">♕ Dama</button>
+        <button type="button" data-piece="r">♖ Torre</button>
+        <button type="button" data-piece="b">♗ Bispo</button>
+        <button type="button" data-piece="n">♘ Cavalo</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
