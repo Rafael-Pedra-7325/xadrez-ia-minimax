@@ -6,6 +6,7 @@ Pronto para deploy no Render, Railway, PythonAnywhere, Fly.io ou execução loca
 import os
 import chess
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException
 from jogo import PartidaXadrez
 from ia import melhor_jogada, analisar_posicao, avaliar_tabuleiro
 
@@ -15,10 +16,27 @@ DIFICULDADES_VALIDAS = {"facil", "medio", "mestre"}
 
 
 def _carregar_partida(fen):
+    if not isinstance(fen, str) or not fen.strip():
+        return None
     try:
         return PartidaXadrez(fen)
     except ValueError:
         return None
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(err):
+    if request.path.startswith("/api/"):
+        return jsonify({"erro": err.description or "Erro na requisição."}), err.code
+    return err
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(err):
+    app.logger.exception("Erro interno inesperado: %s", err)
+    if request.path.startswith("/api/"):
+        return jsonify({"erro": "Erro interno no servidor de xadrez. Tente novamente."}), 500
+    return "Erro interno no servidor.", 500
 
 
 @app.route("/")
@@ -33,7 +51,10 @@ def health():
 
 @app.route("/api/validar", methods=["POST"])
 def api_validar():
-    dados = request.get_json(silent=True) or {}
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "Corpo JSON inválido."}), 400
+
     fen = dados.get("fen")
     lance_uci = dados.get("lance")
 
@@ -57,12 +78,19 @@ def api_validar():
 
 @app.route("/api/jogada", methods=["POST"])
 def api_jogada():
-    dados = request.get_json(silent=True) or {}
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "Corpo JSON inválido."}), 400
+
     fen = dados.get("fen")
     dificuldade = dados.get("dificuldade", "mestre")
+    historico_fens = dados.get("historico_fens")
 
     if dificuldade not in DIFICULDADES_VALIDAS:
         dificuldade = "mestre"
+
+    if not isinstance(historico_fens, list):
+        historico_fens = []
 
     partida = _carregar_partida(fen)
     if partida is None:
@@ -76,7 +104,18 @@ def api_jogada():
             "telemetria": None,
         })
 
-    lance_uci, detalhes = melhor_jogada(partida.board, dificuldade=dificuldade)
+    lance_uci, detalhes = melhor_jogada(
+        partida.board,
+        dificuldade=dificuldade,
+        historico_fens=historico_fens,
+    )
+    if not lance_uci:
+        return jsonify({
+            "lance": None,
+            "estado": partida.estado_jogo(),
+            "telemetria": None,
+        })
+
     info_lance = partida.jogar_uci(lance_uci)
 
     return jsonify({
@@ -96,7 +135,10 @@ def api_jogada():
 
 @app.route("/api/analisar", methods=["POST"])
 def api_analisar():
-    dados = request.get_json(silent=True) or {}
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "Corpo JSON inválido."}), 400
+
     fen = dados.get("fen")
 
     partida = _carregar_partida(fen)
@@ -112,7 +154,13 @@ def api_analisar():
             "tempo_ms": 0,
         })
 
-    resultado = analisar_posicao(partida.board, partida.board.turn, profundidade=2, limite_candidatos=4)
+    resultado = analisar_posicao(
+        partida.board,
+        partida.board.turn,
+        profundidade=2,
+        limite_candidatos=4,
+        tempo_limite_s=1.0,
+    )
     melhor = resultado["avaliacoes"][0] if resultado["avaliacoes"] else None
 
     return jsonify({
