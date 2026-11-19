@@ -1,6 +1,8 @@
 import os
 import sys
+import time
 import unittest
+import chess
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -23,32 +25,65 @@ class XadrezMinimaxTestCase(unittest.TestCase):
         lance, _ = melhor_jogada(partida.board, dificuldade="mestre")
         self.assertEqual(lance, "c3d5")
 
-    def test_rejeita_lance_ilegal(self):
+    def test_rejeita_lance_ilegal_e_entradas_invalidas(self):
         partida = PartidaXadrez()
         with self.assertRaises(ValueError):
             partida.jogar_uci("e2e5")
+        with self.assertRaises(ValueError):
+            partida.jogar_uci(None)
+        with self.assertRaises(ValueError):
+            PartidaXadrez("")
+        with self.assertRaises(ValueError):
+            PartidaXadrez("8/8/8/8/8/8/8/8 w - - 0 1")  # Sem reis
+
+    def test_orcamento_tempo_meio_jogo_complexo(self):
+        fen_complexo = "r1bq1rk1/pp2ppbp/2np1np1/8/2BNP3/2N1BP2/PPPQ2PP/R3K2R w KQ - 3 9"
+        partida = PartidaXadrez(fen_complexo)
+        inicio = time.perf_counter()
+        lance, detalhes = melhor_jogada(partida.board, dificuldade="mestre")
+        duracao = time.perf_counter() - inicio
+        self.assertIsNotNone(lance)
+        self.assertLess(duracao, 3.5)
+        self.assertGreater(detalhes["nos_avaliados"], 0)
 
 
 class XadrezWebApiTestCase(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def test_pagina_principal_carrega(self):
+    def test_pagina_principal_e_health(self):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"Xadrez", resp.data)
+        resp_health = self.client.get("/health")
+        self.assertEqual(resp_health.status_code, 200)
 
     def test_fluxo_validar_e_jogada_ia(self):
-        fen_inicial = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        fen_inicial = chess.STARTING_FEN
         resp_val = self.client.post("/api/validar", json={"fen": fen_inicial, "lance": "e2e4"})
         self.assertEqual(resp_val.status_code, 200)
         novo_fen = resp_val.get_json()["estado"]["fen"]
 
-        resp_ia = self.client.post("/api/jogada", json={"fen": novo_fen, "dificuldade": "medio"})
+        resp_ia = self.client.post(
+            "/api/jogada",
+            json={"fen": novo_fen, "dificuldade": "medio", "historico_fens": [fen_inicial, novo_fen]},
+        )
         self.assertEqual(resp_ia.status_code, 200)
         dados = resp_ia.get_json()
         self.assertIsNotNone(dados["lance"])
         self.assertGreater(dados["telemetria"]["nos_avaliados"], 0)
+
+    def test_api_resiste_a_payloads_malformados(self):
+        casos_invalidos = [
+            ("/api/validar", {"fen": chess.STARTING_FEN}),  # sem lance
+            ("/api/validar", {"fen": "", "lance": "e2e4"}),
+            ("/api/validar", {"fen": 123, "lance": "e2e4"}),
+            ("/api/jogada", {"fen": "8/8/8/8/8/8/8/8 w - - 0 1"}),
+            ("/api/analisar", {"fen": None}),
+        ]
+        for rota, payload in casos_invalidos:
+            resp = self.client.post(rota, json=payload)
+            self.assertEqual(resp.status_code, 400, f"Falhou em {rota} com {payload}")
+            self.assertIn("erro", resp.get_json())
 
 
 if __name__ == "__main__":
