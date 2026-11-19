@@ -18,6 +18,7 @@
   };
 
   const estado = {
+    partidaId: 0, // Controla geração da partida para descartar respostas atrasadas
     fen: FEN_INICIAL,
     turno: "brancas",
     corHumano: "brancas",
@@ -27,15 +28,19 @@
     casaSelecionada: null,
     ultimoLance: null,
     casaReiXeque: null,
+    evalBrancasCp: 0,
     bloqueado: false,
     terminou: false,
     modoRaioX: false,
     somAtivo: true,
     pilhaEstados: [],
     historicoSan: [],
+    historicoFens: [FEN_INICIAL],
     promocaoPendente: null,
     placar: { vitorias: 0, empates: 0, derrotas: 0 },
   };
+
+  let abortControllerAtivo = null;
 
   const tabuleiroEl = document.getElementById("tabuleiro");
   const setasSvg = document.getElementById("setas-svg");
@@ -87,6 +92,68 @@
         osc.stop(t + 0.22);
       }
     } catch (_) {}
+  }
+
+  function cancelarRequisicaoAtiva() {
+    if (abortControllerAtivo) {
+      try {
+        abortControllerAtivo.abort();
+      } catch (_) {}
+      abortControllerAtivo = null;
+    }
+  }
+
+  function fecharModalPromocao() {
+    estado.promocaoPendente = null;
+    modalPromocao.classList.add("hidden");
+  }
+
+  async function fetchApiSegura(url, payload, { tentativas = 2, timeoutMs = 25000 } = {}) {
+    cancelarRequisicaoAtiva();
+    const controller = new AbortController();
+    abortControllerAtivo = controller;
+
+    for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        const textoBruto = await resp.text();
+        let dados = null;
+        try {
+          dados = textoBruto ? JSON.parse(textoBruto) : {};
+        } catch (_) {
+          // Resposta HTML (ex: Render acordando ou 502 temporário)
+          if (tentativa < tentativas && [502, 503, 504].includes(resp.status)) {
+            atualizarStatus("⏳ Servidor acordando no Render, reconectando...", "turno-ia");
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          throw new Error("O servidor demorou a responder. Tente novamente.");
+        }
+
+        if (!resp.ok) {
+          throw new Error(dados.erro || `Erro HTTP ${resp.status}`);
+        }
+        return dados;
+      } catch (err) {
+        clearTimeout(timer);
+        if (err.name === "AbortError") {
+          throw err;
+        }
+        if (tentativa < tentativas) {
+          await new Promise((r) => setTimeout(r, 1200));
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   function carregarPlacar() {
@@ -158,6 +225,7 @@
   }
 
   function atualizarBarraAvaliacao(cp) {
+    estado.evalBrancasCp = cp;
     const peoes = (cp / 100).toFixed(2);
     placarEvalEl.textContent = cp > 0 ? `+${peoes}` : peoes;
 
@@ -250,7 +318,7 @@
       const opacidade = idx === 0 ? 0.85 : 0.42;
       const largura = idx === 0 ? 14 : 9;
 
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      const line = document.createElementNS("[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)", "line");
       line.setAttribute("x1", x1);
       line.setAttribute("y1", y1);
       line.setAttribute("x2", x2);
@@ -302,47 +370,54 @@
   }
 
   async function executarLanceHumano(lanceUci) {
+    const partidaAtual = estado.partidaId;
     estado.bloqueado = true;
     estado.casaSelecionada = null;
 
+    const snapshotAntesLance = {
+      fen: estado.fen,
+      historicoSan: [...estado.historicoSan],
+      historicoFens: [...estado.historicoFens],
+      ultimoLance: estado.ultimoLance,
+      casaReiXeque: estado.casaReiXeque,
+      evalBrancasCp: estado.evalBrancasCp,
+    };
+
     try {
-      const resp = await fetch("/api/validar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: estado.fen, lance: lanceUci }),
-      });
-      const dados = await resp.json();
-      if (!resp.ok) throw new Error(dados.erro || "Lance inválido");
-
-      estado.pilhaEstados.push({
+      const dados = await fetchApiSegura("/api/validar", {
         fen: estado.fen,
-        historicoSan: [...estado.historicoSan],
-        ultimoLance: estado.ultimoLance,
+        lance: lanceUci,
       });
 
+      if (partidaAtual !== estado.partidaId) return;
+
+      estado.pilhaEstados.push(snapshotAntesLance);
+      estado.historicoFens.push(dados.estado.fen);
       aplicarRespostaEstado(dados.estado, dados.lance, dados.avaliacao_brancas_cp);
 
       if (!estado.terminou) {
-        await turnoIA();
+        await turnoIA(partidaAtual);
       }
     } catch (e) {
+      if (e.name === "AbortError" || partidaAtual !== estado.partidaId) return;
       estado.bloqueado = false;
+      renderizarTabuleiro();
       atualizarStatus(`⚠️ ${e.message}`, "xeque");
     }
   }
 
-  async function turnoIA() {
+  async function turnoIA(partidaAtual = estado.partidaId) {
     estado.bloqueado = true;
     atualizarStatus("🤖 IA calculando variantes na árvore Minimax...", "turno-ia");
 
     try {
-      const resp = await fetch("/api/jogada", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: estado.fen, dificuldade: estado.dificuldade }),
+      const dados = await fetchApiSegura("/api/jogada", {
+        fen: estado.fen,
+        dificuldade: estado.dificuldade,
+        historico_fens: estado.historicoFens.slice(-12),
       });
-      const dados = await resp.json();
-      if (!resp.ok) throw new Error(dados.erro || "Erro na IA");
+
+      if (partidaAtual !== estado.partidaId) return;
 
       if (dados.telemetria) {
         telNosEl.textContent = dados.telemetria.nos_avaliados.toLocaleString("pt-BR");
@@ -350,23 +425,26 @@
         telMotivoEl.textContent = dados.telemetria.motivo;
       }
 
+      estado.historicoFens.push(dados.estado.fen);
       aplicarRespostaEstado(
         dados.estado,
         dados.lance,
-        dados.telemetria ? dados.telemetria.avaliacao_brancas_cp : 0
+        dados.telemetria ? dados.telemetria.avaliacao_brancas_cp : estado.evalBrancasCp
       );
     } catch (e) {
+      if (e.name === "AbortError" || partidaAtual !== estado.partidaId) return;
       estado.bloqueado = false;
-      atualizarStatus(`⚠️ ${e.message}`, "xeque");
+      renderizarTabuleiro();
+      atualizarStatus(`⚠️ ${e.message} (Clique em Nova Partida ou Desfazer)`, "xeque");
     }
   }
 
   function aplicarRespostaEstado(novoEstado, infoLance, evalBrancasCp) {
     estado.fen = novoEstado.fen;
     estado.turno = novoEstado.turno;
-    estado.lancesLegais = novoEstado.lances_legais;
-    estado.casaReiXeque = novoEstado.casa_rei_xeque;
-    estado.terminou = novoEstado.terminou;
+    estado.lancesLegais = novoEstado.lances_legais || [];
+    estado.casaReiXeque = novoEstado.casa_rei_xeque || null;
+    estado.terminou = Boolean(novoEstado.terminou);
     estado.bloqueado = false;
 
     if (infoLance) {
@@ -430,14 +508,22 @@
   }
 
   async function atualizarRaioX() {
+    const fenAlvo = estado.fen;
+    const partidaAtual = estado.partidaId;
     try {
       const resp = await fetch("/api/analisar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: estado.fen }),
+        body: JSON.stringify({ fen: fenAlvo }),
       });
       const dados = await resp.json();
-      if (resp.ok && dados.avaliacoes) {
+      if (
+        resp.ok &&
+        dados.avaliacoes &&
+        partidaAtual === estado.partidaId &&
+        fenAlvo === estado.fen &&
+        estado.modoRaioX
+      ) {
         desenharSetas(dados.avaliacoes);
       }
     } catch (_) {}
@@ -445,14 +531,18 @@
 
   async function pedirDica() {
     if (estado.bloqueado || estado.terminou) return;
+    const fenAlvo = estado.fen;
+    const partidaAtual = estado.partidaId;
     try {
       const resp = await fetch("/api/analisar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: estado.fen }),
+        body: JSON.stringify({ fen: fenAlvo }),
       });
       const dados = await resp.json();
-      if (!resp.ok || !dados.melhor_lance) return;
+      if (!resp.ok || !dados.melhor_lance || partidaAtual !== estado.partidaId || fenAlvo !== estado.fen) {
+        return;
+      }
 
       desenharSetas([dados.melhor_lance]);
       const origem = dados.melhor_lance.uci.slice(0, 2);
@@ -468,6 +558,11 @@
   }
 
   async function iniciarNovaPartida() {
+    cancelarRequisicaoAtiva();
+    fecharModalPromocao();
+    estado.partidaId += 1;
+    const partidaAtual = estado.partidaId;
+
     estado.fen = FEN_INICIAL;
     estado.turno = "brancas";
     estado.casaSelecionada = null;
@@ -477,6 +572,7 @@
     estado.bloqueado = false;
     estado.pilhaEstados = [];
     estado.historicoSan = [];
+    estado.historicoFens = [FEN_INICIAL];
     estado.invertido = estado.corHumano === "pretas";
 
     estado.lancesLegais = [
@@ -493,46 +589,55 @@
     renderizarTabuleiro();
 
     if (estado.corHumano === "pretas") {
-      await turnoIA();
+      await turnoIA(partidaAtual);
     } else {
       atualizarStatus("Sua vez! Selecione uma peça branca para jogar.", "turno-humano");
     }
   }
 
-  function desfazerJogada() {
+  async function desfazerJogada() {
     if (estado.bloqueado || !estado.pilhaEstados.length) return;
+    fecharModalPromocao();
+
     const anterior = estado.pilhaEstados.pop();
+    const partidaAtual = estado.partidaId;
+    estado.bloqueado = true;
     estado.fen = anterior.fen;
     estado.historicoSan = anterior.historicoSan;
+    estado.historicoFens = anterior.historicoFens;
     estado.ultimoLance = anterior.ultimoLance;
+    estado.casaReiXeque = anterior.casaReiXeque;
     estado.terminou = false;
     estado.casaSelecionada = null;
     atualizarHistoricoUI();
+    atualizarBarraAvaliacao(anterior.evalBrancasCp || 0);
 
-    fetch("/api/analisar", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fen: estado.fen }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.lances_legais) {
-          estado.lancesLegais = d.lances_legais;
-        }
-        estado.turno = estado.corHumano;
-        renderizarTabuleiro();
-        atualizarStatus("Jogada desfeita. Sua vez!", "turno-humano");
-      });
+    try {
+      const dados = await fetchApiSegura("/api/analisar", { fen: estado.fen });
+      if (partidaAtual !== estado.partidaId) return;
+
+      if (dados.lances_legais) {
+        estado.lancesLegais = dados.lances_legais;
+      }
+      estado.turno = estado.corHumano;
+      estado.bloqueado = false;
+      renderizarTabuleiro();
+      atualizarStatus("Jogada desfeita. Sua vez!", "turno-humano");
+    } catch (e) {
+      if (e.name === "AbortError" || partidaAtual !== estado.partidaId) return;
+      estado.bloqueado = false;
+      renderizarTabuleiro();
+      atualizarStatus(`⚠️ Erro ao desfazer: ${e.message}`, "xeque");
+    }
   }
 
   document.querySelectorAll(".promo-options button").forEach((btn) => {
     btn.addEventListener("click", () => {
       const peca = btn.dataset.piece;
-      modalPromocao.classList.add("hidden");
-      if (estado.promocaoPendente) {
-        const lanceCompleto = `${estado.promocaoPendente}${peca}`;
-        estado.promocaoPendente = null;
-        executarLanceHumano(lanceCompleto);
+      const prefixo = estado.promocaoPendente;
+      fecharModalPromocao();
+      if (prefixo) {
+        executarLanceHumano(`${prefixo}${peca}`);
       }
     });
   });
