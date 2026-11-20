@@ -57,6 +57,10 @@ def api_validar():
 
     fen = dados.get("fen")
     lance_uci = dados.get("lance")
+    historico_fens = dados.get("historico_fens")
+
+    if not isinstance(historico_fens, list):
+        historico_fens = []
 
     partida = _carregar_partida(fen)
     if partida is None:
@@ -68,10 +72,11 @@ def api_validar():
         return jsonify({"erro": str(erro)}), 400
 
     eval_brancas = avaliar_tabuleiro(partida.board, chess.WHITE)
+    historico_atualizado = historico_fens + [partida.board.fen()]
 
     return jsonify({
         "lance": info_lance,
-        "estado": partida.estado_jogo(),
+        "estado": partida.estado_jogo(historico_fens=historico_atualizado),
         "avaliacao_brancas_cp": eval_brancas,
     })
 
@@ -96,7 +101,7 @@ def api_jogada():
     if partida is None:
         return jsonify({"erro": "FEN inválido."}), 400
 
-    estado_atual = partida.estado_jogo()
+    estado_atual = partida.estado_jogo(historico_fens=historico_fens)
     if estado_atual["terminou"]:
         return jsonify({
             "lance": None,
@@ -112,15 +117,16 @@ def api_jogada():
     if not lance_uci:
         return jsonify({
             "lance": None,
-            "estado": partida.estado_jogo(),
+            "estado": partida.estado_jogo(historico_fens=historico_fens),
             "telemetria": None,
         })
 
     info_lance = partida.jogar_uci(lance_uci)
+    historico_atualizado = historico_fens + [partida.board.fen()]
 
     return jsonify({
         "lance": info_lance,
-        "estado": partida.estado_jogo(),
+        "estado": partida.estado_jogo(historico_fens=historico_atualizado),
         "telemetria": {
             "nos_avaliados": detalhes.get("nos_avaliados", 0),
             "tempo_ms": detalhes.get("tempo_ms", 0),
