@@ -32,6 +32,10 @@ body {
   line-height: 1.5;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .mono {
   font-family: "JetBrains Mono", monospace;
 }
@@ -254,6 +258,51 @@ body {
   box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
 }
 
+.toggle-card {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  cursor: pointer;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  transition: border-color 0.2s ease;
+}
+
+.toggle-card:hover {
+  border-color: var(--border-bright);
+}
+
+.toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toggle-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.toggle-desc {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.toggle-card input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--cyan);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .captured-box {
   background: rgba(2, 6, 23, 0.55);
   border: 1px solid var(--border-subtle);
@@ -319,9 +368,14 @@ body {
   transition: all 0.2s ease;
 }
 
-.ghost-btn:hover {
+.ghost-btn:hover:not(:disabled) {
   border-color: var(--border-bright);
   color: var(--text-primary);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .board-wrapper {
@@ -346,6 +400,12 @@ body {
 .status-banner.turno-humano {
   border-color: rgba(56, 189, 248, 0.4);
   color: #e0f2fe;
+}
+
+.status-banner.turno-pretas {
+  border-color: rgba(167, 139, 250, 0.5);
+  background: rgba(139, 92, 246, 0.14);
+  color: #ede9fe;
 }
 
 .status-banner.turno-ia {
@@ -457,6 +517,10 @@ body {
   box-shadow: inset 0 0 0 3px rgba(250, 204, 21, 0.72);
 }
 
+.square.drag-over {
+  box-shadow: inset 0 0 0 3px var(--cyan);
+}
+
 .square.in-check {
   background: radial-gradient(circle, rgba(239, 68, 68, 0.85) 15%, rgba(185, 28, 28, 0.6) 80%) !important;
 }
@@ -509,6 +573,14 @@ body {
   z-index: 2;
   transition: transform 0.14s ease;
   filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.42));
+}
+
+.piece-svg[draggable="true"] {
+  cursor: grab;
+}
+
+.piece-svg[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .square:hover .piece-svg {
@@ -702,6 +774,10 @@ kbd {
 .promo-options button:hover {
   border-color: var(--cyan);
   background: rgba(56, 189, 248, 0.16);
+}
+
+.modal-cancel-btn {
+  margin-top: 12px;
 }
 
 @media (max-width: 1020px) {
