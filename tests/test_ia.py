@@ -36,6 +36,14 @@ class XadrezMinimaxTestCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             PartidaXadrez("8/8/8/8/8/8/8/8 w - - 0 1")  # Sem reis
 
+    def test_detecta_empate_repeticao_tripla_por_historico(self):
+        partida = PartidaXadrez()
+        fen_inicial = partida.board.fen()
+        estado = partida.estado_jogo(historico_fens=[fen_inicial, fen_inicial, fen_inicial])
+        self.assertTrue(estado["terminou"])
+        self.assertEqual(estado["vencedor"], "empate")
+        self.assertEqual(estado["motivo_fim"], "Repetição tripla")
+
     def test_orcamento_tempo_meio_jogo_complexo(self):
         fen_complexo = "r1bq1rk1/pp2ppbp/2np1np1/8/2BNP3/2N1BP2/PPPQ2PP/R3K2R w KQ - 3 9"
         partida = PartidaXadrez(fen_complexo)
@@ -43,6 +51,7 @@ class XadrezMinimaxTestCase(unittest.TestCase):
         lance, detalhes = melhor_jogada(partida.board, dificuldade="mestre")
         duracao = time.perf_counter() - inicio
         self.assertIsNotNone(lance)
+        self.assertEqual(partida.board.fen(), fen_complexo)
         self.assertLess(duracao, 3.5)
         self.assertGreater(detalhes["nos_avaliados"], 0)
 
@@ -71,6 +80,17 @@ class XadrezWebApiTestCase(unittest.TestCase):
         dados = resp_ia.get_json()
         self.assertIsNotNone(dados["lance"])
         self.assertGreater(dados["telemetria"]["nos_avaliados"], 0)
+
+    def test_fluxo_dois_jogadores_local(self):
+        fen0 = chess.STARTING_FEN
+        r1 = self.client.post("/api/validar", json={"fen": fen0, "lance": "e2e4", "historico_fens": [fen0]})
+        self.assertEqual(r1.status_code, 200)
+        fen1 = r1.get_json()["estado"]["fen"]
+        self.assertEqual(r1.get_json()["estado"]["turno"], "pretas")
+
+        r2 = self.client.post("/api/validar", json={"fen": fen1, "lance": "e7e5", "historico_fens": [fen0, fen1]})
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.get_json()["estado"]["turno"], "brancas")
 
     def test_api_resiste_a_payloads_malformados(self):
         casos_invalidos = [
