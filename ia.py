@@ -1,7 +1,7 @@
 """
 Motor de Inteligência Artificial para Xadrez usando Minimax com Poda Alfa-Beta,
-Aprofundamento Iterativo com orçamento de tempo, Tabela de Transposição (Zobrist)
-e Ordenação Tática de Lances (MVV-LVA).
+Busca de Quiescência, Aprofundamento Iterativo com orçamento de tempo,
+Tabela de Transposição (Zobrist) e Ordenação Tática de Lances (MVV-LVA).
 """
 
 import random
@@ -84,6 +84,17 @@ PST_REI = [
      20,  30,  10,   0,   0,  10,  30,  20,
 ]
 
+PST_REI_FINAL = [
+    -50, -40, -30, -20, -20, -30, -40, -50,
+    -30, -20, -10,   0,   0, -10, -20, -30,
+    -30, -10,  20,  30,  30,  20, -10, -30,
+    -30, -10,  30,  40,  40,  30, -10, -30,
+    -30, -10,  30,  40,  40,  30, -10, -30,
+    -30, -10,  20,  30,  30,  20, -10, -30,
+    -30, -30,   0,   0,   0,   0, -30, -30,
+    -50, -30, -30, -30, -30, -30, -30, -50,
+]
+
 TABELAS_POSICIONAIS = {
     chess.PAWN: PST_PEAO,
     chess.KNIGHT: PST_CAVALO,
@@ -114,7 +125,7 @@ def _chave_posicao_fen(fen):
 def avaliar_tabuleiro(board, cor_ia):
     """
     Avalia a posição em centipeões sob a perspectiva de `cor_ia`.
-    Valores positivos favorecem a IA; negativos favorecem o oponente.
+    Inclui material, Piece-Square Tables (abertura/meio-jogo e final) e par de bispos.
     """
     if board.is_checkmate():
         return -MATE_SCORE if board.turn == cor_ia else MATE_SCORE
@@ -127,9 +138,11 @@ def avaliar_tabuleiro(board, cor_ia):
     ):
         return 0
 
+    eh_final = len(board.pieces(chess.QUEEN, chess.WHITE)) == 0 and len(board.pieces(chess.QUEEN, chess.BLACK)) == 0
     pontuacao = 0
+
     for tipo_peca, valor in VALOR_PECAS.items():
-        tabela = TABELAS_POSICIONAIS[tipo_peca]
+        tabela = PST_REI_FINAL if (tipo_peca == chess.KING and eh_final) else TABELAS_POSICIONAIS[tipo_peca]
 
         for sq in board.pieces(tipo_peca, chess.WHITE):
             idx = chess.square_mirror(sq)
@@ -137,6 +150,12 @@ def avaliar_tabuleiro(board, cor_ia):
 
         for sq in board.pieces(tipo_peca, chess.BLACK):
             pontuacao -= valor + tabela[sq]
+
+    # Bônus para o par de bispos
+    if len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
+        pontuacao += 30
+    if len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
+        pontuacao -= 30
 
     return pontuacao if cor_ia == chess.WHITE else -pontuacao
 
@@ -169,7 +188,67 @@ def _ordenar_lances(board, lance_tt=None):
     return lances
 
 
-def minimax(board, profundidade, alfa, beta, maximizando, cor_ia, metricas, tt, deadline):
+def _busca_quiescencia(board, alfa, beta, maximizando, cor_ia, metricas, deadline, prof_q=0):
+    """Avalia sequências forçadas de capturas e promoções para evitar o efeito horizonte."""
+    metricas["nos"] += 1
+    if (metricas["nos"] & 511) == 0 and time.perf_counter() >= deadline:
+        raise BuscaTimeout()
+
+    if board.is_checkmate():
+        return -MATE_SCORE if board.turn == cor_ia else MATE_SCORE
+
+    if (
+        board.is_stalemate()
+        or board.is_insufficient_material()
+        or board.is_seventyfive_moves()
+        or board.is_fivefold_repetition()
+    ):
+        return 0
+
+    avaliacao_estatica = avaliar_tabuleiro(board, cor_ia)
+    if prof_q >= 4:
+        return avaliacao_estatica
+
+    lances_taticos = [m for m in board.legal_moves if board.is_capture(m) or m.promotion]
+    lances_taticos.sort(key=lambda m: _prioridade_lance(board, m), reverse=True)
+
+    if maximizando:
+        if avaliacao_estatica >= beta:
+            return beta
+        if avaliacao_estatica > alfa:
+            alfa = avaliacao_estatica
+
+        for move in lances_taticos:
+            board.push(move)
+            try:
+                valor = _busca_quiescencia(board, alfa, beta, False, cor_ia, metricas, deadline, prof_q + 1)
+            finally:
+                board.pop()
+            if valor >= beta:
+                return beta
+            if valor > alfa:
+                alfa = valor
+        return alfa
+    else:
+        if avaliacao_estatica <= alfa:
+            return alfa
+        if avaliacao_estatica < beta:
+            beta = avaliacao_estatica
+
+        for move in lances_taticos:
+            board.push(move)
+            try:
+                valor = _busca_quiescencia(board, alfa, beta, True, cor_ia, metricas, deadline, prof_q + 1)
+            finally:
+                board.pop()
+            if valor <= alfa:
+                return alfa
+            if valor < beta:
+                beta = valor
+        return beta
+
+
+def minimax(board, profundidade, alfa, beta, maximizando, cor_ia, metricas, tt, deadline, usar_quiescencia=True):
     """Busca Minimax com Poda Alfa-Beta, Tabela de Transposição e checagem periódica de tempo."""
     metricas["nos"] += 1
     if (metricas["nos"] & 511) == 0 and time.perf_counter() >= deadline:
@@ -187,6 +266,8 @@ def minimax(board, profundidade, alfa, beta, maximizando, cor_ia, metricas, tt, 
         return 0
 
     if profundidade <= 0:
+        if usar_quiescencia:
+            return _busca_quiescencia(board, alfa, beta, maximizando, cor_ia, metricas, deadline)
         return avaliar_tabuleiro(board, cor_ia)
 
     alfa_orig = alfa
@@ -215,8 +296,12 @@ def minimax(board, profundidade, alfa, beta, maximizando, cor_ia, metricas, tt, 
         melhor = float("-inf")
         for move in lances:
             board.push(move)
-            valor = minimax(board, profundidade - 1, alfa, beta, False, cor_ia, metricas, tt, deadline)
-            board.pop()
+            try:
+                valor = minimax(
+                    board, profundidade - 1, alfa, beta, False, cor_ia, metricas, tt, deadline, usar_quiescencia
+                )
+            finally:
+                board.pop()
             if valor > melhor:
                 melhor = valor
                 melhor_lance = move
@@ -227,8 +312,12 @@ def minimax(board, profundidade, alfa, beta, maximizando, cor_ia, metricas, tt, 
         melhor = float("inf")
         for move in lances:
             board.push(move)
-            valor = minimax(board, profundidade - 1, alfa, beta, True, cor_ia, metricas, tt, deadline)
-            board.pop()
+            try:
+                valor = minimax(
+                    board, profundidade - 1, alfa, beta, True, cor_ia, metricas, tt, deadline, usar_quiescencia
+                )
+            finally:
+                board.pop()
             if valor < melhor:
                 melhor = valor
                 melhor_lance = move
@@ -256,6 +345,7 @@ def analisar_posicao(
     limite_candidatos=5,
     tempo_limite_s=2.2,
     historico_fens=None,
+    usar_quiescencia=True,
 ):
     """
     Avalia os lances legais a partir de `board` sob o ponto de vista de `cor_referencia`
@@ -266,7 +356,8 @@ def analisar_posicao(
     metricas = {"nos": 0}
     tt = {}
 
-    lances_raiz = _ordenar_lances(board)
+    board_busca = board.copy(stack=False)
+    lances_raiz = _ordenar_lances(board_busca)
     if not lances_raiz:
         return {
             "avaliacoes": [],
@@ -294,29 +385,32 @@ def analisar_posicao(
             prazo_atual = float("inf") if prof_atual == 1 else deadline
 
             for move in lances_raiz:
-                board.push(move)
-                chave_pos = _chave_posicao_fen(board.fen())
-                repeticoes = contagem_fens.get(chave_pos, 0)
+                board_busca.push(move)
+                try:
+                    chave_pos = _chave_posicao_fen(board_busca.fen())
+                    repeticoes = contagem_fens.get(chave_pos, 0)
 
-                if repeticoes >= 2:
-                    valor = 0
-                else:
-                    valor = minimax(
-                        board,
-                        profundidade=prof_atual - 1,
-                        alfa=float("-inf"),
-                        beta=float("inf"),
-                        maximizando=False,
-                        cor_ia=cor_referencia,
-                        metricas=metricas,
-                        tt=tt,
-                        deadline=prazo_atual,
-                    )
-                    # Penaliza leve repetição quando está vencendo para evitar loops infinitos
-                    if repeticoes == 1 and valor > 30:
-                        valor -= 45
+                    if repeticoes >= 2:
+                        valor = 0
+                    else:
+                        valor = minimax(
+                            board_busca,
+                            profundidade=prof_atual - 1,
+                            alfa=float("-inf"),
+                            beta=float("inf"),
+                            maximizando=False,
+                            cor_ia=cor_referencia,
+                            metricas=metricas,
+                            tt=tt,
+                            deadline=prazo_atual,
+                            usar_quiescencia=usar_quiescencia,
+                        )
+                        # Penaliza leve repetição quando está vencendo para evitar loops infinitos
+                        if repeticoes == 1 and valor > 30:
+                            valor -= 45
+                finally:
+                    board_busca.pop()
 
-                board.pop()
                 mapa_iteracao[move.uci()] = (move, valor)
 
             melhor_mapa = mapa_iteracao
@@ -392,8 +486,8 @@ def melhor_jogada(board, dificuldade="mestre", historico_fens=None):
     """
     Escolhe o lance da IA de acordo com o nível:
     - 'facil': profundidade 1 com chance de lances exploratórios
-    - 'medio': profundidade 2 com variação tática ocasional
-    - 'mestre': profundidade 3 (com orçamento de 2.2s) e Poda Alfa-Beta completa
+    - 'medio': profundidade 2 + quiescência com variação tática ocasional
+    - 'mestre': profundidade 3 + quiescência (orçamento de 2.2s) e Poda Alfa-Beta completa
     """
     lances_legais = list(board.legal_moves)
     if not lances_legais:
@@ -420,6 +514,7 @@ def melhor_jogada(board, dificuldade="mestre", historico_fens=None):
         limite_candidatos=len(lances_legais),
         tempo_limite_s=tempo_limite,
         historico_fens=historico_fens,
+        usar_quiescencia=(dificuldade != "facil"),
     )
     todas = analise["todas_avaliacoes"]
 
