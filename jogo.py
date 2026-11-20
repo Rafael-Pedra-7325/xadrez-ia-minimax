@@ -63,7 +63,7 @@ class PartidaXadrez:
             "xeque": self.board.is_check(),
         }
 
-    def estado_jogo(self):
+    def estado_jogo(self, historico_fens=None):
         terminou = self.board.is_game_over(claim_draw=True)
         vencedor = None
         motivo_fim = None
@@ -79,6 +79,17 @@ class PartidaXadrez:
                     vencedor = "empate"
 
                 motivo_fim = MAPA_MOTIVOS_FIM.get(outcome.termination, "Fim de partida")
+        elif historico_fens:
+            chave_atual = " ".join(self.board.fen().split()[:4])
+            ocorrencias = sum(
+                1
+                for f in historico_fens
+                if isinstance(f, str) and f.strip() and " ".join(f.split()[:4]) == chave_atual
+            )
+            if ocorrencias >= 3:
+                terminou = True
+                vencedor = "empate"
+                motivo_fim = MAPA_MOTIVOS_FIM[chess.Termination.THREEFOLD_REPETITION]
 
         casa_rei_xeque = None
         if self.board.is_check():
