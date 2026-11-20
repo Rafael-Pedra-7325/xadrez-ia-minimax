@@ -38,7 +38,7 @@
 
     <section class="scoreboard" aria-label="Placar da sessão">
       <div class="score-card score-win">
-        <span class="score-label">Vitórias</span>
+        <span id="placar-label-1" class="score-label">Vitórias</span>
         <strong id="placar-vitorias">0</strong>
       </div>
       <div class="score-card score-draw">
@@ -46,7 +46,7 @@
         <strong id="placar-empates">0</strong>
       </div>
       <div class="score-card score-loss">
-        <span class="score-label">IA Venceu</span>
+        <span id="placar-label-2" class="score-label">IA Venceu</span>
         <strong id="placar-derrotas">0</strong>
       </div>
       <div class="score-card score-eval">
@@ -58,6 +58,14 @@
     <section class="game-layout">
       <aside class="panel controls-panel">
         <div class="control-group">
+          <label>Modo de Jogo</label>
+          <div class="segmented segmented-2" id="grupo-modo">
+            <button type="button" data-value="ia" class="active">🤖 Vs IA</button>
+            <button type="button" data-value="2p">👥 2 Jogadores</button>
+          </div>
+        </div>
+
+        <div class="control-group" id="box-dificuldade">
           <label>Nível da IA</label>
           <div class="segmented" id="grupo-dificuldade">
             <button type="button" data-value="facil">Fácil</button>
@@ -66,7 +74,7 @@
           </div>
         </div>
 
-        <div class="control-group">
+        <div class="control-group" id="box-cor">
           <label>Suas Peças</label>
           <div class="segmented segmented-2" id="grupo-cor">
             <button type="button" data-value="brancas" class="active">♔ Brancas</button>
@@ -74,14 +82,24 @@
           </div>
         </div>
 
+        <div class="control-group hidden" id="box-auto-girar">
+          <label class="toggle-card" for="chk-auto-girar">
+            <div class="toggle-info">
+              <span class="toggle-title">Girar a cada lance</span>
+              <span class="toggle-desc">Vira o tabuleiro automaticamente entre turnos</span>
+            </div>
+            <input type="checkbox" id="chk-auto-girar" />
+          </label>
+        </div>
+
         <div class="captured-box">
           <span class="stat-title">Peças Capturadas</span>
           <div class="captured-row">
-            <span class="cap-label">Por você:</span>
+            <span id="cap-label-1" class="cap-label">Por você:</span>
             <div id="cap-humano" class="cap-list">—</div>
           </div>
           <div class="captured-row">
-            <span class="cap-label">Pela IA:</span>
+            <span id="cap-label-2" class="cap-label">Pela IA:</span>
             <div id="cap-ia" class="cap-list">—</div>
           </div>
         </div>
@@ -90,7 +108,7 @@
           <button id="btn-reiniciar" class="primary-btn">
             ↻ Nova Partida
           </button>
-          <button id="btn-desfazer" class="ghost-btn">
+          <button id="btn-desfazer" class="ghost-btn" disabled>
             ↩ Desfazer Jogada
           </button>
           <button id="btn-zerar-placar" class="ghost-btn">
@@ -117,14 +135,14 @@
         </div>
 
         <p class="keyboard-hint">
-          Clique na peça e depois na casa de destino • <kbd>Z</kbd> desfazer • <kbd>R</kbd> reiniciar
+          Clique ou arraste a peça • <kbd>Z</kbd> desfazer • <kbd>R</kbd> reiniciar
         </p>
       </section>
 
       <aside class="panel telemetry-panel">
         <div class="telemetry-header">
           <span class="pulse-indicator"></span>
-          <h2>Cérebro da IA</h2>
+          <h2 id="tel-titulo">Cérebro da IA</h2>
         </div>
 
         <div class="telemetry-stats">
@@ -160,12 +178,15 @@
     <div class="modal-card">
       <h3>Promover Peão</h3>
       <p>Escolha para qual peça deseja evoluir:</p>
-      <div class="promo-options">
+      <div class="promo-options" id="promo-options">
         <button type="button" data-piece="q">♕ Dama</button>
         <button type="button" data-piece="r">♖ Torre</button>
         <button type="button" data-piece="b">♗ Bispo</button>
         <button type="button" data-piece="n">♘ Cavalo</button>
       </div>
+      <button type="button" id="btn-cancelar-promocao" class="ghost-btn modal-cancel-btn">
+        Cancelar
+      </button>
     </div>
   </div>
 
