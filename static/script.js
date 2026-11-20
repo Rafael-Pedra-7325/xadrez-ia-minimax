@@ -18,7 +18,9 @@
   };
 
   const estado = {
-    partidaId: 0, // Controla geração da partida para descartar respostas atrasadas
+    partidaId: 0,
+    modoJogo: "ia", // "ia" ou "2p"
+    autoGirar2P: false,
     fen: FEN_INICIAL,
     turno: "brancas",
     corHumano: "brancas",
@@ -26,18 +28,22 @@
     dificuldade: "mestre",
     lancesLegais: [],
     casaSelecionada: null,
+    casaArrastada: null,
     ultimoLance: null,
     casaReiXeque: null,
     evalBrancasCp: 0,
     bloqueado: false,
     terminou: false,
     modoRaioX: false,
+    setasDica: null,
+    casasDica: [],
     somAtivo: true,
     pilhaEstados: [],
     historicoSan: [],
     historicoFens: [FEN_INICIAL],
     promocaoPendente: null,
-    placar: { vitorias: 0, empates: 0, derrotas: 0 },
+    placarIA: { vitorias: 0, empates: 0, derrotas: 0 },
+    placar2P: { brancas: 0, empates: 0, pretas: 0 },
   };
 
   let abortControllerAtivo = null;
@@ -54,6 +60,7 @@
   const telMotivoEl = document.getElementById("tel-motivo");
   const listaHistoricoEl = document.getElementById("lista-historico");
   const modalPromocao = document.getElementById("modal-promocao");
+  const btnDesfazer = document.getElementById("btn-desfazer");
 
   let audioCtx = null;
   function tocarSom(tipo) {
@@ -103,6 +110,20 @@
     }
   }
 
+  function abrirModalPromocao(prefixoLance) {
+    estado.promocaoPendente = prefixoLance;
+    const isBrancas = estado.turno === "brancas";
+    const botoes = document.getElementById("promo-options").querySelectorAll("button");
+    const labels = isBrancas
+      ? { q: "♕ Dama", r: "♖ Torre", b: "♗ Bispo", n: "♘ Cavalo" }
+      : { q: "♛ Dama", r: "♜ Torre", b: "♝ Bispo", n: "♞ Cavalo" };
+
+    botoes.forEach((btn) => {
+      btn.textContent = labels[btn.dataset.piece];
+    });
+    modalPromocao.classList.remove("hidden");
+  }
+
   function fecharModalPromocao() {
     estado.promocaoPendente = null;
     modalPromocao.classList.add("hidden");
@@ -129,7 +150,6 @@
         try {
           dados = textoBruto ? JSON.parse(textoBruto) : {};
         } catch (_) {
-          // Resposta HTML (ex: Render acordando ou 502 temporário)
           if (tentativa < tentativas && [502, 503, 504].includes(resp.status)) {
             atualizarStatus("⏳ Servidor acordando no Render, reconectando...", "turno-ia");
             await new Promise((r) => setTimeout(r, 1500));
@@ -156,25 +176,56 @@
     }
   }
 
-  function carregarPlacar() {
+  function carregarPlacares() {
     try {
-      const salvo = localStorage.getItem("xadrez_ia_placar");
-      if (salvo) estado.placar = { ...estado.placar, ...JSON.parse(salvo) };
+      const salvoIA = localStorage.getItem("xadrez_ia_placar");
+      if (salvoIA) estado.placarIA = { ...estado.placarIA, ...JSON.parse(salvoIA) };
+      const salvo2P = localStorage.getItem("xadrez_2p_placar");
+      if (salvo2P) estado.placar2P = { ...estado.placar2P, ...JSON.parse(salvo2P) };
     } catch (_) {}
     atualizarPlacarUI();
   }
 
-  function salvarPlacar() {
+  function salvarPlacares() {
     try {
-      localStorage.setItem("xadrez_ia_placar", JSON.stringify(estado.placar));
+      localStorage.setItem("xadrez_ia_placar", JSON.stringify(estado.placarIA));
+      localStorage.setItem("xadrez_2p_placar", JSON.stringify(estado.placar2P));
     } catch (_) {}
     atualizarPlacarUI();
   }
 
   function atualizarPlacarUI() {
-    document.getElementById("placar-vitorias").textContent = estado.placar.vitorias;
-    document.getElementById("placar-empates").textContent = estado.placar.empates;
-    document.getElementById("placar-derrotas").textContent = estado.placar.derrotas;
+    const lbl1 = document.getElementById("placar-label-1");
+    const lbl2 = document.getElementById("placar-label-2");
+    const val1 = document.getElementById("placar-vitorias");
+    const valEmp = document.getElementById("placar-empates");
+    const val2 = document.getElementById("placar-derrotas");
+
+    if (estado.modoJogo === "2p") {
+      lbl1.textContent = "♔ Brancas";
+      lbl2.textContent = "♚ Pretas";
+      val1.textContent = estado.placar2P.brancas;
+      valEmp.textContent = estado.placar2P.empates;
+      val2.textContent = estado.placar2P.pretas;
+    } else {
+      lbl1.textContent = "Vitórias";
+      lbl2.textContent = "IA Venceu";
+      val1.textContent = estado.placarIA.vitorias;
+      valEmp.textContent = estado.placarIA.empates;
+      val2.textContent = estado.placarIA.derrotas;
+    }
+  }
+
+  function atualizarInterfaceModo() {
+    const eh2P = estado.modoJogo === "2p";
+    document.getElementById("box-dificuldade").classList.toggle("hidden", eh2P);
+    document.getElementById("box-cor").classList.toggle("hidden", eh2P);
+    document.getElementById("box-auto-girar").classList.toggle("hidden", !eh2P);
+
+    document.getElementById("cap-label-1").textContent = eh2P ? "Pelas Brancas:" : "Por você:";
+    document.getElementById("cap-label-2").textContent = eh2P ? "Pelas Pretas:" : "Pela IA:";
+    document.getElementById("tel-titulo").textContent = eh2P ? "Análise da Posição" : "Cérebro da IA";
+    atualizarPlacarUI();
   }
 
   function parseFenMapa(fen) {
@@ -218,10 +269,15 @@
       pretasPerdidas += simbolos[low].repeat(diffB);
     });
 
-    const capHumano = estado.corHumano === "brancas" ? pretasPerdidas : brancasPerdidas;
-    const capIA = estado.corHumano === "brancas" ? brancasPerdidas : pretasPerdidas;
-    document.getElementById("cap-humano").textContent = capHumano || "—";
-    document.getElementById("cap-ia").textContent = capIA || "—";
+    if (estado.modoJogo === "2p") {
+      document.getElementById("cap-humano").textContent = pretasPerdidas || "—";
+      document.getElementById("cap-ia").textContent = brancasPerdidas || "—";
+    } else {
+      const capHumano = estado.corHumano === "brancas" ? pretasPerdidas : brancasPerdidas;
+      const capIA = estado.corHumano === "brancas" ? brancasPerdidas : pretasPerdidas;
+      document.getElementById("cap-humano").textContent = capHumano || "—";
+      document.getElementById("cap-ia").textContent = capIA || "—";
+    }
   }
 
   function atualizarBarraAvaliacao(cp) {
@@ -235,9 +291,20 @@
     evalBarLabel.textContent = Math.abs(cp / 100).toFixed(1);
   }
 
+  function podeMoverPeca(pecaCode) {
+    if (!pecaCode || estado.bloqueado || estado.terminou) return false;
+    const corPeca = pecaCode.startsWith("w") ? "brancas" : "pretas";
+    if (estado.modoJogo === "2p") {
+      return corPeca === estado.turno;
+    }
+    return estado.turno === estado.corHumano && corPeca === estado.corHumano;
+  }
+
   function renderizarTabuleiro() {
     const mapaPecas = parseFenMapa(estado.fen);
     atualizarPecasCapturadas(mapaPecas);
+    btnDesfazer.disabled = estado.bloqueado || estado.pilhaEstados.length === 0;
+
     tabuleiroEl.innerHTML = "";
     setasSvg.innerHTML = "";
 
@@ -268,6 +335,7 @@
           sqEl.classList.add("last-move");
         }
         if (estado.casaReiXeque === casa) sqEl.classList.add("in-check");
+        if (estado.casasDica.includes(casa)) sqEl.classList.add("hint-square");
 
         if (cVis === 0) {
           const rLabel = document.createElement("span");
@@ -285,6 +353,24 @@
         const pecaCode = mapaPecas[casa];
         if (pecaCode && PECAS_SVG[pecaCode]) {
           sqEl.insertAdjacentHTML("beforeend", PECAS_SVG[pecaCode]);
+          const svgPeca = sqEl.querySelector(".piece-svg");
+          if (svgPeca && podeMoverPeca(pecaCode)) {
+            svgPeca.setAttribute("draggable", "true");
+            svgPeca.addEventListener("dragstart", (e) => {
+              estado.casaArrastada = casa;
+              estado.casaSelecionada = casa;
+              e.dataTransfer?.setData("text/plain", casa);
+              setTimeout(() => {
+                if (estado.casaArrastada === casa) {
+                  destacarDestinosSemReconstruir(casa);
+                }
+              }, 0);
+            });
+            svgPeca.addEventListener("dragend", () => {
+              estado.casaArrastada = null;
+              tabuleiroEl.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+            });
+          }
         }
 
         if (destinosLegais.has(casa)) {
@@ -293,14 +379,52 @@
           sqEl.appendChild(ind);
         }
 
+        sqEl.addEventListener("dragover", (e) => {
+          if (estado.casaArrastada) {
+            e.preventDefault();
+            sqEl.classList.add("drag-over");
+          }
+        });
+        sqEl.addEventListener("dragleave", () => sqEl.classList.remove("drag-over"));
+        sqEl.addEventListener("drop", (e) => {
+          e.preventDefault();
+          sqEl.classList.remove("drag-over");
+          const origem = estado.casaArrastada || e.dataTransfer?.getData("text/plain");
+          estado.casaArrastada = null;
+          if (origem && origem !== casa) {
+            tentarMover(origem, casa);
+          }
+        });
+
         sqEl.addEventListener("click", () => aoClicarCasa(casa, pecaCode));
         tabuleiroEl.appendChild(sqEl);
       });
     });
 
-    if (estado.modoRaioX && !estado.terminou && !estado.bloqueado) {
+    if (estado.setasDica && estado.setasDica.length) {
+      desenharSetas(estado.setasDica);
+    } else if (estado.modoRaioX && !estado.terminou && !estado.bloqueado) {
       atualizarRaioX();
     }
+  }
+
+  function destacarDestinosSemReconstruir(casaOrigem) {
+    tabuleiroEl.querySelectorAll(".legal-dot, .legal-ring").forEach((el) => el.remove());
+    tabuleiroEl.querySelectorAll(".selected").forEach((el) => el.classList.remove("selected"));
+    const sqOrigem = tabuleiroEl.querySelector(`[data-square="${casaOrigem}"]`);
+    if (sqOrigem) sqOrigem.classList.add("selected");
+
+    estado.lancesLegais.forEach((uci) => {
+      if (uci.startsWith(casaOrigem)) {
+        const dest = uci.slice(2, 4);
+        const sqDest = tabuleiroEl.querySelector(`[data-square="${dest}"]`);
+        if (sqDest && !sqDest.querySelector(".legal-dot, .legal-ring")) {
+          const ind = document.createElement("span");
+          ind.className = sqDest.querySelector(".piece-svg") ? "legal-ring" : "legal-dot";
+          sqDest.appendChild(ind);
+        }
+      }
+    });
   }
 
   function desenharSetas(candidatos) {
@@ -318,7 +442,7 @@
       const opacidade = idx === 0 ? 0.85 : 0.42;
       const largura = idx === 0 ? 14 : 9;
 
-      const line = document.createElementNS("[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)", "line");
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.setAttribute("x1", x1);
       line.setAttribute("y1", y1);
       line.setAttribute("x2", x2);
@@ -340,27 +464,32 @@
     return [col * 100 + 50, row * 100 + 50];
   }
 
-  function aoClicarCasa(casa, pecaCode) {
-    if (estado.bloqueado || estado.terminou || estado.turno !== estado.corHumano) return;
+  function tentarMover(origem, destino) {
+    const prefixoLance = `${origem}${destino}`;
+    const correspondentes = estado.lancesLegais.filter((u) => u.startsWith(prefixoLance));
 
-    const prefixoCor = estado.corHumano === "brancas" ? "w" : "b";
+    if (correspondentes.length > 0) {
+      if (correspondentes[0].length === 5) {
+        abrirModalPromocao(prefixoLance);
+        return true;
+      }
+      executarLanceJogador(correspondentes[0]);
+      return true;
+    }
+    return false;
+  }
+
+  function aoClicarCasa(casa, pecaCode) {
+    if (estado.bloqueado || estado.terminou) return;
+    if (estado.modoJogo === "ia" && estado.turno !== estado.corHumano) return;
 
     if (estado.casaSelecionada) {
-      const prefixoLance = `${estado.casaSelecionada}${casa}`;
-      const correspondentes = estado.lancesLegais.filter((u) => u.startsWith(prefixoLance));
-
-      if (correspondentes.length > 0) {
-        if (correspondentes[0].length === 5) {
-          estado.promocaoPendente = prefixoLance;
-          modalPromocao.classList.remove("hidden");
-          return;
-        }
-        executarLanceHumano(correspondentes[0]);
+      if (tentarMover(estado.casaSelecionada, casa)) {
         return;
       }
     }
 
-    if (pecaCode && pecaCode.startsWith(prefixoCor)) {
+    if (podeMoverPeca(pecaCode)) {
       estado.casaSelecionada = estado.casaSelecionada === casa ? null : casa;
       renderizarTabuleiro();
     } else {
@@ -369,13 +498,16 @@
     }
   }
 
-  async function executarLanceHumano(lanceUci) {
+  async function executarLanceJogador(lanceUci) {
     const partidaAtual = estado.partidaId;
     estado.bloqueado = true;
     estado.casaSelecionada = null;
+    estado.setasDica = null;
+    estado.casasDica = [];
 
     const snapshotAntesLance = {
       fen: estado.fen,
+      turno: estado.turno,
       historicoSan: [...estado.historicoSan],
       historicoFens: [...estado.historicoFens],
       ultimoLance: estado.ultimoLance,
@@ -387,6 +519,7 @@
       const dados = await fetchApiSegura("/api/validar", {
         fen: estado.fen,
         lance: lanceUci,
+        historico_fens: estado.historicoFens.slice(-24),
       });
 
       if (partidaAtual !== estado.partidaId) return;
@@ -395,7 +528,13 @@
       estado.historicoFens.push(dados.estado.fen);
       aplicarRespostaEstado(dados.estado, dados.lance, dados.avaliacao_brancas_cp);
 
-      if (!estado.terminou) {
+      if (estado.modoJogo === "2p" && !estado.terminou) {
+        const peoes = (dados.avaliacao_brancas_cp / 100).toFixed(2);
+        const sinal = dados.avaliacao_brancas_cp > 0 ? `+${peoes}` : peoes;
+        telMotivoEl.textContent = `Lance ${dados.lance.san} registrado. Avaliação estática: ${sinal} peões.`;
+      }
+
+      if (estado.modoJogo === "ia" && !estado.terminou) {
         await turnoIA(partidaAtual);
       }
     } catch (e) {
@@ -447,6 +586,10 @@
     estado.terminou = Boolean(novoEstado.terminou);
     estado.bloqueado = false;
 
+    if (estado.modoJogo === "2p" && estado.autoGirar2P && !estado.terminou) {
+      estado.invertido = estado.turno === "pretas";
+    }
+
     if (infoLance) {
       estado.ultimoLance = infoLance.uci;
       estado.historicoSan.push(infoLance.san);
@@ -464,22 +607,42 @@
     renderizarTabuleiro();
 
     if (novoEstado.terminou) {
-      if (novoEstado.vencedor === "empate") {
-        estado.placar.empates += 1;
-        atualizarStatus(`🤝 Empate por ${novoEstado.motivo_fim}!`, "xeque");
-      } else if (novoEstado.vencedor === estado.corHumano) {
-        estado.placar.vitorias += 1;
-        atualizarStatus(`🎉 Vitória por ${novoEstado.motivo_fim}! Você derrotou a IA!`, "resultado-vitoria");
+      if (estado.modoJogo === "2p") {
+        if (novoEstado.vencedor === "empate") {
+          estado.placar2P.empates += 1;
+          atualizarStatus(`🤝 Empate por ${novoEstado.motivo_fim}!`, "xeque");
+        } else if (novoEstado.vencedor === "brancas") {
+          estado.placar2P.brancas += 1;
+          atualizarStatus(`🏆 Vitória das Brancas por ${novoEstado.motivo_fim}!`, "resultado-vitoria");
+        } else {
+          estado.placar2P.pretas += 1;
+          atualizarStatus(`🏆 Vitória das Pretas por ${novoEstado.motivo_fim}!`, "resultado-vitoria");
+        }
       } else {
-        estado.placar.derrotas += 1;
-        atualizarStatus(`🤖 Fim de jogo (${novoEstado.motivo_fim}) — A IA venceu.`, "resultado-derrota");
+        if (novoEstado.vencedor === "empate") {
+          estado.placarIA.empates += 1;
+          atualizarStatus(`🤝 Empate por ${novoEstado.motivo_fim}!`, "xeque");
+        } else if (novoEstado.vencedor === estado.corHumano) {
+          estado.placarIA.vitorias += 1;
+          atualizarStatus(`🎉 Vitória por ${novoEstado.motivo_fim}! Você derrotou a IA!`, "resultado-vitoria");
+        } else {
+          estado.placarIA.derrotas += 1;
+          atualizarStatus(`🤖 Fim de jogo (${novoEstado.motivo_fim}) — A IA venceu.`, "resultado-derrota");
+        }
       }
-      salvarPlacar();
+      salvarPlacares();
       return;
     }
 
     if (novoEstado.xeque) {
-      atualizarStatus("⚠️ XEQUE! Proteja seu Rei.", "xeque");
+      const ladoXeque = estado.turno === "brancas" ? "Brancas" : "Pretas";
+      atualizarStatus(`⚠️ XEQUE nas ${ladoXeque}! Proteja o Rei.`, "xeque");
+    } else if (estado.modoJogo === "2p") {
+      if (estado.turno === "brancas") {
+        atualizarStatus("♔ Vez das Brancas! Selecione uma peça branca.", "turno-humano");
+      } else {
+        atualizarStatus("♚ Vez das Pretas! Selecione uma peça preta.", "turno-pretas");
+      }
     } else if (estado.turno === estado.corHumano) {
       atualizarStatus("Sua vez! Selecione uma peça para mover.", "turno-humano");
     }
@@ -544,15 +707,14 @@
         return;
       }
 
-      desenharSetas([dados.melhor_lance]);
-      const origem = dados.melhor_lance.uci.slice(0, 2);
-      const destino = dados.melhor_lance.uci.slice(2, 4);
-      tabuleiroEl.querySelectorAll(".square").forEach((s) => {
-        s.classList.remove("hint-square");
-        if (s.dataset.square === origem || s.dataset.square === destino) {
-          s.classList.add("hint-square");
-        }
-      });
+      estado.setasDica = [dados.melhor_lance];
+      estado.casasDica = [
+        dados.melhor_lance.uci.slice(0, 2),
+        dados.melhor_lance.uci.slice(2, 4),
+      ];
+      renderizarTabuleiro();
+      telNosEl.textContent = dados.nos_avaliados.toLocaleString("pt-BR");
+      telTempoEl.textContent = `${dados.tempo_ms} ms`;
       telMotivoEl.textContent = `Dica tática: jogue ${dados.melhor_lance.san} (${dados.nos_avaliados} nós analisados).`;
     } catch (_) {}
   }
@@ -566,14 +728,17 @@
     estado.fen = FEN_INICIAL;
     estado.turno = "brancas";
     estado.casaSelecionada = null;
+    estado.casaArrastada = null;
     estado.ultimoLance = null;
     estado.casaReiXeque = null;
     estado.terminou = false;
     estado.bloqueado = false;
+    estado.setasDica = null;
+    estado.casasDica = [];
     estado.pilhaEstados = [];
     estado.historicoSan = [];
     estado.historicoFens = [FEN_INICIAL];
-    estado.invertido = estado.corHumano === "pretas";
+    estado.invertido = estado.modoJogo === "ia" && estado.corHumano === "pretas";
 
     estado.lancesLegais = [
       "a2a3", "a2a4", "b2b3", "b2b4", "c2c3", "c2c4", "d2d3", "d2d4",
@@ -581,15 +746,21 @@
       "b1a3", "b1c3", "g1f3", "g1h3",
     ];
 
+    atualizarInterfaceModo();
     atualizarHistoricoUI();
     atualizarBarraAvaliacao(0);
     telNosEl.textContent = "—";
     telTempoEl.textContent = "—";
-    telMotivoEl.textContent = "Nova partida iniciada.";
+    telMotivoEl.textContent =
+      estado.modoJogo === "2p"
+        ? "Partida local entre 2 jogadores iniciada. Use Dica ou Visão da IA se quiser analisar."
+        : "Nova partida iniciada.";
     renderizarTabuleiro();
 
-    if (estado.corHumano === "pretas") {
+    if (estado.modoJogo === "ia" && estado.corHumano === "pretas") {
       await turnoIA(partidaAtual);
+    } else if (estado.modoJogo === "2p") {
+      atualizarStatus("♔ Vez das Brancas! Selecione uma peça branca para começar.", "turno-humano");
     } else {
       atualizarStatus("Sua vez! Selecione uma peça branca para jogar.", "turno-humano");
     }
@@ -603,12 +774,20 @@
     const partidaAtual = estado.partidaId;
     estado.bloqueado = true;
     estado.fen = anterior.fen;
+    estado.turno = anterior.turno || (anterior.fen.split(" ")[1] === "w" ? "brancas" : "pretas");
     estado.historicoSan = anterior.historicoSan;
     estado.historicoFens = anterior.historicoFens;
     estado.ultimoLance = anterior.ultimoLance;
     estado.casaReiXeque = anterior.casaReiXeque;
     estado.terminou = false;
     estado.casaSelecionada = null;
+    estado.setasDica = null;
+    estado.casasDica = [];
+
+    if (estado.modoJogo === "2p" && estado.autoGirar2P) {
+      estado.invertido = estado.turno === "pretas";
+    }
+
     atualizarHistoricoUI();
     atualizarBarraAvaliacao(anterior.evalBrancasCp || 0);
 
@@ -619,10 +798,18 @@
       if (dados.lances_legais) {
         estado.lancesLegais = dados.lances_legais;
       }
-      estado.turno = estado.corHumano;
       estado.bloqueado = false;
       renderizarTabuleiro();
-      atualizarStatus("Jogada desfeita. Sua vez!", "turno-humano");
+
+      if (estado.modoJogo === "2p") {
+        const ehBrancas = estado.turno === "brancas";
+        atualizarStatus(
+          ehBrancas ? "Jogada desfeita. ♔ Vez das Brancas!" : "Jogada desfeita. ♚ Vez das Pretas!",
+          ehBrancas ? "turno-humano" : "turno-pretas"
+        );
+      } else {
+        atualizarStatus("Jogada desfeita. Sua vez!", "turno-humano");
+      }
     } catch (e) {
       if (e.name === "AbortError" || partidaAtual !== estado.partidaId) return;
       estado.bloqueado = false;
@@ -637,9 +824,14 @@
       const prefixo = estado.promocaoPendente;
       fecharModalPromocao();
       if (prefixo) {
-        executarLanceHumano(`${prefixo}${peca}`);
+        executarLanceJogador(`${prefixo}${peca}`);
       }
     });
+  });
+
+  document.getElementById("btn-cancelar-promocao").addEventListener("click", fecharModalPromocao);
+  modalPromocao.addEventListener("click", (e) => {
+    if (e.target === modalPromocao) fecharModalPromocao();
   });
 
   function configurarSegmented(id, cb) {
@@ -653,6 +845,11 @@
     });
   }
 
+  configurarSegmented("grupo-modo", (v) => {
+    estado.modoJogo = v;
+    iniciarNovaPartida();
+  });
+
   configurarSegmented("grupo-dificuldade", (v) => {
     estado.dificuldade = v;
     iniciarNovaPartida();
@@ -663,11 +860,23 @@
     iniciarNovaPartida();
   });
 
+  document.getElementById("chk-auto-girar").addEventListener("change", (e) => {
+    estado.autoGirar2P = e.target.checked;
+    if (estado.modoJogo === "2p" && estado.autoGirar2P) {
+      estado.invertido = estado.turno === "pretas";
+      renderizarTabuleiro();
+    }
+  });
+
   document.getElementById("btn-reiniciar").addEventListener("click", iniciarNovaPartida);
-  document.getElementById("btn-desfazer").addEventListener("click", desfazerJogada);
+  btnDesfazer.addEventListener("click", desfazerJogada);
   document.getElementById("btn-zerar-placar").addEventListener("click", () => {
-    estado.placar = { vitorias: 0, empates: 0, derrotas: 0 };
-    salvarPlacar();
+    if (estado.modoJogo === "2p") {
+      estado.placar2P = { brancas: 0, empates: 0, pretas: 0 };
+    } else {
+      estado.placarIA = { vitorias: 0, empates: 0, derrotas: 0 };
+    }
+    salvarPlacares();
   });
 
   document.getElementById("btn-inverter").addEventListener("click", () => {
@@ -696,10 +905,23 @@
   });
 
   document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+
+    if (e.key === "Escape") {
+      if (!modalPromocao.classList.contains("hidden")) {
+        fecharModalPromocao();
+      } else if (estado.casaSelecionada) {
+        estado.casaSelecionada = null;
+        renderizarTabuleiro();
+      }
+      return;
+    }
+    if (!modalPromocao.classList.contains("hidden")) return;
     if (e.key.toLowerCase() === "r") iniciarNovaPartida();
     if (e.key.toLowerCase() === "z") desfazerJogada();
   });
 
-  carregarPlacar();
+  carregarPlacares();
   iniciarNovaPartida();
 })();
